@@ -1,0 +1,5 @@
+{
+  "private": true,
+  "description": "Vercel install. Locally run: cd backend && npm install && npm start",
+  "dependencies": { "express": "^4.19.2", "multer": "^1.4.5-lts.1" }
+}
