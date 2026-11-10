@@ -1,8 +1,7 @@
 const express = require('express'), fs = require('fs'), path = require('path'), crypto = require('crypto');
-const multer = require('multer');
+const multer = require('multer'), { Pool } = require('pg'), { AsyncLocalStorage, AsyncResource } = require('async_hooks');
 const app = express(); app.use(express.json());
-const DATA = process.env.VERCEL ? '/tmp' : __dirname;   // Vercel's filesystem is read-only except /tmp
-const DB = path.join(DATA, 'data.json');
+const DB = path.join(__dirname, 'data.json');   // only read once, to fill an empty database
 const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 const STAFF = { 'admin@test.in': { pw: '@Admin123', role: 'admin' }, 'mess1@test.in': { pw: '@Mess001', role: 'mess' } };
 const TIMES = { breakfast: '7:30am - 9:00am', lunch: '12:30pm - 2:30pm', dinner: '7:30pm - 9:00pm' };
@@ -22,10 +21,43 @@ function seed() {
   const menu = {}; DAYS.forEach((x, i) => menu[x] = { breakfast: J(b[i]), lunch: J(l[i]), dinner: J(d[i]) });
   return { menu, prices: { breakfast: 30, lunch: 65, dinner: 55 }, notices: [], orders: [], grievances: [] };
 }
-const src = [DB, path.join(__dirname, 'data.json')].find(fs.existsSync);   // on Vercel, start from the committed data.json
-let db = src ? JSON.parse(fs.readFileSync(src)) : seed();
-db.students = db.students || {};   // email -> { qr }  (one permanent QR code per student)
-const save = () => fs.writeFileSync(DB, JSON.stringify(db, null, 1));
+// ---- Postgres storage. Each record is one row in `docs` (kind + id -> JSON); uploaded files are rows in `files`. ----
+// Every API request reloads the data and waits for its own writes before replying: serverless copies share no memory and freeze after replying.
+// shortcut: each request reads every row; move handlers to targeted SQL queries once orders reach the tens of thousands.
+if (!process.env.DATABASE_URL) throw new Error('Set DATABASE_URL to a Postgres connection string (see README).');
+const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 3 });
+pool.on('error', e => console.error('Idle database connection closed:', e.message));   // Neon drops idle connections when it sleeps; without this the server crashes
+const pending = new AsyncLocalStorage();   // the current request's writes
+const run = (sql, args) => {
+  const w = pending.getStore(); if (!w) throw new Error('Database write outside a request');
+  const p = pool.query(sql, args); p.catch(() => { }); w.push(p); return p;
+};
+const put = (kind, id, data) => run('INSERT INTO docs(kind, id, data) VALUES($1, $2, $3) ON CONFLICT (kind, id) DO UPDATE SET data = EXCLUDED.data', [kind, id, JSON.stringify(data)]);
+const del = (kind, id) => run('DELETE FROM docs WHERE kind = $1 AND id = $2', [kind, id]);
+async function setup() {
+  await pool.query(`CREATE TABLE IF NOT EXISTS docs (seq BIGSERIAL, kind TEXT NOT NULL, id TEXT NOT NULL, data JSONB NOT NULL, PRIMARY KEY (kind, id));
+    CREATE TABLE IF NOT EXISTS files (name TEXT PRIMARY KEY, type TEXT NOT NULL, data BYTEA NOT NULL)`);
+  if ((await pool.query('SELECT 1 FROM docs LIMIT 1')).rows.length) return;
+  const d = fs.existsSync(DB) ? JSON.parse(fs.readFileSync(DB)) : seed(), rows = [['settings', 'menu', d.menu], ['settings', 'prices', d.prices]];   // empty database: import data.json, or the default menu
+  for (const k of ['notices', 'grievances']) d[k].slice().reverse().forEach(x => rows.push([k, x.id, x]));   // stored oldest first, shown newest first
+  d.orders.forEach(o => rows.push(['orders', o.id, o]));
+  Object.entries(d.students || {}).forEach(([email, s]) => rows.push(['students', email, s]));
+  for (const r of rows) await pool.query('INSERT INTO docs(kind, id, data) VALUES($1, $2, $3) ON CONFLICT DO NOTHING', [r[0], r[1], JSON.stringify(r[2])]);   // ON CONFLICT: two cold starts may import at once
+}
+let ready, db;
+async function load() {
+  await (ready = ready || setup().catch(e => { ready = null; throw e; }));
+  const d = { notices: [], orders: [], grievances: [], students: {} };   // students: email -> { qr } (one permanent QR code per student)
+  for (const { kind, id, data } of (await pool.query('SELECT kind, id, data FROM docs ORDER BY seq')).rows)
+    if (kind === 'settings') d[id] = data; else if (kind === 'students') d.students[id] = data; else d[kind].push(data);
+  d.notices.reverse(); d.grievances.reverse(); return d;
+}
+app.use('/api', async (req, res, next) => {
+  try { db = await load(); } catch (e) { console.error(e); return res.status(503).json({ error: 'Database unavailable, please try again' }); }
+  const writes = [], json = res.json.bind(res);
+  res.json = body => { Promise.all(writes).then(() => json(body), e => { console.error('DB write failed:', e.message); res.status(500); json({ error: 'Could not save, please try again' }); }); return res; };
+  pending.run(writes, next);
+});
 const uid = p => p + crypto.randomBytes(4).toString('hex').toUpperCase();
 const today = () => new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10);
 const dayOf = date => DAYS[(new Date(date + 'T00:00:00Z').getUTCDay() + 6) % 7];
@@ -75,19 +107,19 @@ app.get('/api/menu', auth(), (_, res) => {
 app.put('/api/menu', auth('admin', 'mess'), (req, res) => {
   const { day, meal, items } = req.body;
   if (!db.menu[day] || !TIMES[meal] || !items) return res.status(400).json({ error: 'Bad request' });
-  db.menu[day][meal] = items; save(); res.json({ ok: true });
+  db.menu[day][meal] = items; put('settings', 'menu', db.menu); res.json({ ok: true });
 });
 app.put('/api/prices', auth('admin', 'mess'), (req, res) => {
   for (const m of Object.keys(TIMES)) { const v = Number(req.body[m]); if (v > 0) db.prices[m] = v; }
-  save(); res.json(db.prices);
+  put('settings', 'prices', db.prices); res.json(db.prices);
 });
 
 app.get('/api/notices', auth(), (_, res) => res.json(db.notices));
 app.post('/api/notices', auth('admin', 'mess'), (req, res) => {
-  db.notices.unshift({ id: uid('N'), title: req.body.title, body: req.body.body, by: req.user.role, at: new Date().toISOString() });
-  save(); res.json({ ok: true });
+  const n = { id: uid('N'), title: req.body.title, body: req.body.body, by: req.user.role, at: new Date().toISOString() };
+  put('notices', n.id, n); res.json({ ok: true });
 });
-app.delete('/api/notices/:id', auth('admin', 'mess'), (req, res) => { db.notices = db.notices.filter(n => n.id !== req.params.id); save(); res.json({ ok: true }); });
+app.delete('/api/notices/:id', auth('admin', 'mess'), (req, res) => { del('notices', req.params.id); res.json({ ok: true }); });
 
 // Student orders (payment simulated: method is recorded, status set to paid)
 app.post('/api/orders', auth('student'), (req, res) => {
@@ -104,7 +136,7 @@ app.post('/api/orders', auth('student'), (req, res) => {
     const dishes = parseMeal(db.menu[dayOf(date)][meal]).map((g, i) => g[Math.min(Math.max(parseInt(picks[i]) || 0, 0), g.length - 1)]);
     made.push({ id: uid('ORD-'), email: req.user.email, date, day: dayOf(date), meal, items: dishes.map(d => d.n).join(', '), dishes, diet: dishes.some(d => !d.v) ? 'nonveg' : 'veg', amount: db.prices[meal], method: method || 'UPI', payment: method === 'Cash' ? 'pending' : 'paid', status: 'paid', createdAt: new Date().toISOString(), servedAt: null });
   }
-  db.orders.push(...made); save(); res.json(made);
+  made.forEach(o => put('orders', o.id, o)); res.json(made);
 });
 app.get('/api/orders/mine', auth('student'), (req, res) => {
   const o = db.orders.filter(x => x.email === req.user.email).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
@@ -129,7 +161,7 @@ function resolveStudent(code) {
   const ord = db.orders.find(o => o.id === up); if (ord) return ord.email;                      // old per-order codes still work
   const em = c.toLowerCase() + '@iiit-bh.ac.in'; return db.orders.some(o => o.email === em) ? em : null;   // roll number typed manually
 }
-app.get('/api/me/qr', auth('student'), (req, res) => { const code = qrFor(req.user.email); save(); res.json({ code, roll: req.user.roll }); });
+app.get('/api/me/qr', auth('student'), (req, res) => { const code = qrFor(req.user.email); put('students', req.user.email, db.students[req.user.email]); res.json({ code, roll: req.user.roll }); });
 app.post('/api/verify', auth('mess'), (req, res) => {
   const email = resolveStudent(req.body.code);
   if (!email) return res.status(404).json({ error: 'Invalid QR - student not found' });
@@ -143,7 +175,7 @@ app.post('/api/serve', auth('mess'), (req, res) => {
   if (!v.servable) return res.status(409).json({ error: `Not serving time for ${o.meal} (${TIMES[o.meal]})` });
   o.status = 'served'; o.servedAt = new Date().toISOString();
   if (o.payment === 'pending') { o.payment = 'paid'; o.paidAt = o.servedAt; }   // cash is collected at the counter when the meal is handed over
-  save(); res.json({ ok: true });
+  put('orders', o.id, o); res.json({ ok: true });
 });
 
 app.get('/api/orders', auth('admin'), (_, res) => res.json(db.orders.slice().reverse()));
@@ -161,31 +193,43 @@ app.get('/api/analytics', auth('admin'), (_, res) => {
   res.json({ revenue, cashDue, orders: db.orders.length, served, pending: db.orders.length - served, students: new Set(db.orders.map(o => o.email)).size, meal, daily, diet, methods, ms, gr });
 });
 
-// ---- Grievances with photo/video evidence (stored in backend/uploads) ----
-const UP = path.join(DATA, 'uploads'); fs.mkdirSync(UP, { recursive: true });
+// ---- Grievances with photo/video evidence (stored in the files table) ----
 const EXT = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/gif': '.gif', 'image/webp': '.webp', 'image/heic': '.heic', 'video/mp4': '.mp4', 'video/webm': '.webm', 'video/quicktime': '.mov' };
 const upload = multer({
-  storage: multer.diskStorage({ destination: UP, filename: (_, f, cb) => cb(null, crypto.randomBytes(12).toString('hex') + EXT[f.mimetype]) }),
-  limits: { fileSize: 25 * 1024 * 1024, files: 3 },
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 4 * 1024 * 1024, files: 3 },   // Vercel rejects requests over 4.5 MB
   fileFilter: (_, f, cb) => cb(EXT[f.mimetype] ? null : new Error('Only JPG/PNG/GIF/WEBP/HEIC images and MP4/WEBM/MOV videos are allowed'), !!EXT[f.mimetype])
 });
-const uploadMw = (req, res, next) => upload.array('files', 3)(req, res, e => e ? res.status(400).json({ error: e.code === 'LIMIT_FILE_SIZE' ? 'File too large (max 25 MB each)' : e.code === 'LIMIT_UNEXPECTED_FILE' ? 'Maximum 3 files' : e.message }) : next());
+const uploadMw = (req, res, next) => upload.array('files', 3)(req, res, AsyncResource.bind(e => e ? res.status(400).json({ error: e.code === 'LIMIT_FILE_SIZE' ? 'Files too large (max 4 MB in total)' : e.code === 'LIMIT_UNEXPECTED_FILE' ? 'Maximum 3 files' : e.message }) : next()));   // bind: keeps this request's write list through multer's stream callbacks
 app.post('/api/grievances', auth('student'), uploadMw, (req, res) => {
   const { category, message } = req.body;
-  if (!message || message.trim().length < 3) { (req.files || []).forEach(f => fs.unlink(f.path, () => { })); return res.status(400).json({ error: 'Please describe the issue' }); }
-  const files = (req.files || []).map(f => ({ name: f.filename, type: f.mimetype.startsWith('video') ? 'video' : 'image', orig: f.originalname }));
-  db.grievances.unshift({ id: uid('G'), email: req.user.email, category, message: message.trim(), files, status: 'open', at: new Date().toISOString() });
-  save(); res.json({ ok: true });
+  if (!message || message.trim().length < 3) return res.status(400).json({ error: 'Please describe the issue' });
+  const files = (req.files || []).map(f => {
+    const name = crypto.randomBytes(12).toString('hex') + EXT[f.mimetype];
+    run('INSERT INTO files(name, type, data) VALUES($1, $2, $3)', [name, f.mimetype, f.buffer]);
+    return { name, type: f.mimetype.startsWith('video') ? 'video' : 'image', orig: f.originalname };
+  });
+  const g = { id: uid('G'), email: req.user.email, category, message: message.trim(), files, status: 'open', at: new Date().toISOString() };
+  put('grievances', g.id, g); res.json({ ok: true });
 });
-app.get('/api/files/:name', auth('admin', 'mess', 'student'), (req, res) => {
+app.get('/api/files/:name', auth('admin', 'mess', 'student'), async (req, res) => {
   const n = path.basename(req.params.name), g = db.grievances.find(x => (x.files || []).some(f => f.name === n));
   if (!g || (req.user.role === 'student' && g.email !== req.user.email)) return res.status(404).end();
-  res.set('X-Content-Type-Options', 'nosniff'); res.sendFile(path.join(UP, n));
+  try {
+    const f = (await pool.query('SELECT type, data FROM files WHERE name = $1', [n])).rows[0]; if (!f) return res.status(404).end();
+    res.set({ 'Content-Type': f.type, 'Accept-Ranges': 'bytes', 'X-Content-Type-Options': 'nosniff' });
+    // Range support so phones (iOS Safari) can play videos.
+    const len = f.data.length, m = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || '');
+    if (!m || (!m[1] && !m[2])) return res.send(f.data);
+    const s = m[1] ? +m[1] : Math.max(len - +m[2], 0), e = m[1] && m[2] ? Math.min(+m[2], len - 1) : len - 1;
+    if (s > e) return res.status(416).set('Content-Range', `bytes */${len}`).end();
+    res.status(206).set('Content-Range', `bytes ${s}-${e}/${len}`).send(f.data.subarray(s, e + 1));
+  } catch (e) { console.error(e); res.status(500).end(); }
 });
 app.get('/api/grievances', auth('admin', 'mess', 'student'), (req, res) =>
   res.json(req.user.role === 'student' ? db.grievances.filter(g => g.email === req.user.email) : db.grievances));
 app.put('/api/grievances/:id', auth('admin', 'mess'), (req, res) => {
-  const g = db.grievances.find(x => x.id === req.params.id); if (g) g.status = 'resolved'; save(); res.json({ ok: true });
+  const g = db.grievances.find(x => x.id === req.params.id); if (g) { g.status = 'resolved'; put('grievances', g.id, g); } res.json({ ok: true });
 });
 
 app.use(express.static(path.join(__dirname, '..', 'public'), { extensions: ['html'], etag: false, lastModified: false, setHeaders: r => r.setHeader('Cache-Control', 'no-store') })); // never serve a stale copy of the pages // /mess and /admin resolve to mess.html / admin.html

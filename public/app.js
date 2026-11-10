@@ -120,7 +120,7 @@ const VIEWS = {
     const g = await api('/grievances'), role = S.user.role;
     const media = x => (x.files || []).map(f => { const u = `${API}/files/${f.name}?t=${S.token}`; return f.type === 'video' ? `<video src="${u}" controls preload="metadata" style="max-width:170px;max-height:120px;border-radius:6px;margin:3px"></video>` : `<a href="${u}" target="_blank"><img src="${u}" alt="" style="max-width:110px;max-height:90px;border-radius:6px;margin:3px"></a>`; }).join('');
     app.innerHTML = `${role === 'student' ? `<div class="card"><h2>Raise a Grievance / Complaint</h2><label>Category</label><select id="gc"><option>Food quality</option><option>Hygiene</option><option>Billing / Payment</option><option>Staff behaviour</option><option>Other</option></select><textarea id="gm" placeholder="Describe the issue"></textarea>
-    <label>Attach photos / videos (optional, up to 3 files, 25 MB each)</label><input id="gf" type="file" accept="image/*,video/*" multiple><div id="gp" style="font-size:12px;color:var(--mut);margin-bottom:10px"></div><button id="gs">Submit</button>
+    <label>Attach photos / videos (optional, up to 3 files, 4 MB in total)</label><input id="gf" type="file" accept="image/*,video/*" multiple><div id="gp" style="font-size:12px;color:var(--mut);margin-bottom:10px"></div><button id="gs">Submit</button>
     <p style="font-size:13px;color:var(--mut)">Mess office: mess1@test.in · Admin: admin@test.in</p></div>` : ''}
     <div class="card"><h2>${role === 'student' ? 'My Grievances' : 'Grievances Received'}</h2><div class="wrap"><table><tr><th>Date</th>${role !== 'student' ? '<th>Student</th>' : ''}<th>Category</th><th>Message</th><th>Status</th></tr>
     ${g.map(x => `<tr><td>${new Date(x.at).toLocaleDateString()}</td>${role !== 'student' ? `<td>${esc(x.email.split('@')[0].toUpperCase())}</td>` : ''}<td>${esc(x.category)}</td><td style="white-space:normal;min-width:190px">${esc(x.message)}<div>${media(x)}</div></td><td>${x.status === 'open' ? (role !== 'student' ? `<button class="sm" data-r="${x.id}">Resolve</button>` : '<span class="tag o">open</span>') : '<span class="tag">resolved</span>'}</td></tr>`).join('') || '<tr><td colspan=5>None</td></tr>'}</table></div></div>`;
@@ -129,7 +129,7 @@ const VIEWS = {
       $('#gs').onclick = guard(async () => {
         const fd = new FormData(), fl = [...$('#gf').files];
         if (fl.length > 3) throw new Error('Maximum 3 files');
-        const big = fl.find(f => f.size > 25 * 1048576); if (big) throw new Error(big.name + ' is over 25 MB');
+        if (fl.reduce((s, f) => s + f.size, 0) > 4 * 1048576) throw new Error('Files are over 4 MB in total. Use smaller photos or a shorter video');   // Vercel rejects requests over 4.5 MB
         fd.append('category', $('#gc').value); fd.append('message', $('#gm').value); fl.forEach(f => fd.append('files', f));
         $('#gs').disabled = true; $('#gs').textContent = 'Uploading...';
         try { await api('/grievances', 'POST', fd); } catch (e) { $('#gs').disabled = false; $('#gs').textContent = 'Submit'; throw e; }

@@ -35,7 +35,7 @@ A web app for the IIIT Bhubaneswar mess. Students pre-order meals and show one Q
 
 ## Tech stack
 
-- **Backend:** Node.js and Express, with Multer for file uploads. Data is stored in a JSON file (`backend/data.json`).
+- **Backend:** Node.js and Express, with Multer for file uploads. Data is stored in PostgreSQL (e.g. a free [Neon](https://neon.tech) database).
 - **Frontend:** plain HTML, CSS and JavaScript (no build step). It also uses Chart.js, qrcodejs and html5-qrcode, loaded from a CDN.
 - **Hosting:** runs locally with `npm start`, or on Vercel as a serverless function.
 
@@ -67,8 +67,11 @@ Requires Node.js 18 or newer.
 ```bash
 cd backend
 npm install
+echo 'DATABASE_URL="postgresql://..."' > .env    # your Postgres connection string; .env is git-ignored
 npm start
 ```
+
+On first start the server creates its tables. If the database is empty, it imports `backend/data.json` once. After that, `data.json` is no longer used.
 
 Open http://localhost:3000. At startup the server also prints an address like `http://<your-ip>:3000`, which you can open on a phone connected to the same Wi-Fi.
 
@@ -85,17 +88,20 @@ Open http://localhost:3000. At startup the server also prints an address like `h
 ## Deploy on Vercel
 
 1. Import this GitHub repository at [vercel.com](https://vercel.com). Choose the framework preset **Other** and keep the root directory as the repo root.
-2. Add the environment variable `SESSION_SECRET` and set it to any long random string. Without it, users get logged out at random.
+2. Add the environment variables:
+   - `DATABASE_URL`: your Neon **pooled** connection string (the host contains `-pooler`).
+   - `SESSION_SECRET`: any long random string. Without it, users get logged out at random.
 3. Deploy. The student, mess and admin pages are at `/`, `/mess` and `/admin`.
 
 **Limitations on Vercel**
-- Vercel has no permanent storage, so data is kept in `/tmp`. New orders, notices, grievances and uploaded files are lost whenever the function restarts. For real use, store the data in a database (e.g. Supabase or Vercel Postgres).
-- Vercel rejects uploads larger than 4.5 MB.
+- Vercel rejects requests larger than 4.5 MB, so grievance uploads are limited to 4 MB in total.
+- Every request reads all the data from the database. This is fine for a semester of orders. With much more data, the handlers should switch to targeted SQL queries.
 
 ## Environment variables
 
 | Variable | Purpose |
 |---|---|
+| `DATABASE_URL` | Postgres connection string. **Required** |
 | `PORT` | Local server port (default `3000`) |
 | `SESSION_SECRET` | Key used to sign login tokens. **Required on Vercel** |
 | `STAFF_PASSWORD_LOGIN=1` | Turns off demo login and requires staff passwords |
@@ -104,5 +110,5 @@ Open http://localhost:3000. At startup the server also prints an address like `h
 
 - Scanning a QR with the camera needs HTTPS or localhost. Over plain `http` on a phone, type the code instead.
 - Payment is simulated in `POST /api/orders`. A real gateway such as Razorpay or PhonePe can be connected there.
-- Grievance uploads accept JPG, PNG, GIF, WEBP and HEIC images and MP4, WEBM and MOV videos, up to 3 files of 25 MB each. Only the student who uploaded them, the mess staff and the admin can view them.
-- Menu format in `data.json`: one dish per line. `A | B` means the student picks one, and `(NV)` marks a non-veg dish.
+- Grievance uploads accept JPG, PNG, GIF, WEBP and HEIC images and MP4, WEBM and MOV videos, up to 3 files and 4 MB in total. They are stored in the database. Only the student who uploaded them, the mess staff and the admin can view them.
+- Menu format: one dish per line. `A | B` means the student picks one, and `(NV)` marks a non-veg dish.
