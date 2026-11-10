@@ -1,33 +1,108 @@
 # IIIT Bhubaneswar Mess Management System
+
+A web app for the IIIT Bhubaneswar mess. Students pre-order meals and show one QR code at the counter. Mess staff scan it to serve the meal, and the admin tracks payments, analytics and grievances. It works on phones and can be added to the home screen like an app.
+
+## Features
+
+**Student** (`/`)
+- **Menu & Order:** see the weekly menu, pick from options such as *Chicken Curry or Paneer Curry*, and order breakfast, lunch or dinner up to 7 days ahead.
+- **Payment:** UPI or Card (both simulated), or Cash (paid at the counter when the meal is served).
+- **My Orders & QR:** order history, total spent, and one permanent personal QR code (`STU-XXXXXXXX`).
+- **Notice Board:** notices from the mess and the admin.
+- **Grievance / Contact:** raise a complaint with up to 3 photos or videos and track whether it has been resolved.
+
+**Mess staff** (`/mess`)
+- **Verify QR:** scan a student's QR with the camera, or type the code or roll number. This shows the student's orders, nearest meal first, and you tick an order to mark it served.
+- **Menu / Update Menu:** view and edit the menu for each day and meal.
+- **Notices** and **Grievances:** post notices, and view and resolve complaints.
+
+**Admin** (`/admin`)
+- **Analytics:** revenue, orders, meals served vs pending, veg/non-veg split, payment methods, daily revenue and grievance stats (charts made with Chart.js).
+- **Payments:** every order with its payment status, plus the cash still to be collected.
+- **Update Menu & Prices**, **Notices** and **Grievances**.
+
+## Meal rules
+
+| Meal | Serving time (IST) | Ordering closes | Default price |
+|---|---|---|---|
+| Breakfast | 7:30am to 9:00am | 7 hours before start | ₹30 |
+| Lunch | 12:30pm to 2:30pm | 1 hour before start | ₹65 |
+| Dinner | 7:30pm to 9:00pm | 1 hour before start | ₹55 |
+
+- A meal can be marked served only from 30 minutes before it starts until 30 minutes after it ends.
+- Each meal can be ordered once per student per day.
+- A cash order shows as *cash due* until the meal is served, then it becomes *paid*. Admin revenue counts only money already collected.
+
+## Tech stack
+
+- **Backend:** Node.js and Express, with Multer for file uploads. Data is stored in a JSON file (`backend/data.json`).
+- **Frontend:** plain HTML, CSS and JavaScript (no build step). It also uses Chart.js, qrcodejs and html5-qrcode, loaded from a CDN.
+- **Hosting:** runs locally with `npm start`, or on Vercel as a serverless function.
+
+## Project structure
+
 ```
-iiit-mess/
-├── backend/   Express REST API + JSON datastore (data.json auto-created)
-└── frontend/  Static HTML/CSS/JS (served by backend, or host anywhere)
-```
-## Run
-```
-cd backend && npm install && npm start      # http://localhost:3000
+iiit-bh-mess-lab-project/
+├── backend/
+│   ├── server.js        Express REST API (also serves the frontend locally)
+│   ├── data.json        menu, prices, orders, notices, grievances
+│   └── package.json
+├── frontend/
+│   ├── index.html       student page
+│   ├── mess.html        mess staff page
+│   ├── admin.html       admin page
+│   ├── app.js           shared UI logic for all three pages
+│   ├── style.css
+│   ├── manifest.json    "Add to Home Screen" support
+│   └── assets/logo.png
+├── api/index.js         Vercel entry point (loads backend/server.js)
+├── vercel.json          Vercel routing
+└── package.json         dependencies that Vercel installs
 ```
 
-## Deploy (Vercel)
-Import the GitHub repo in Vercel (framework preset: **Other**, root directory: repo root). `vercel.json` serves `frontend/` statically and `api/index.js` runs the Express app as a serverless function. Set env var `SESSION_SECRET` to any long random string, or logins will randomly expire.
+## Run locally
 
-**Limit:** Vercel has no persistent disk. Orders, notices, grievances and uploads are kept in `/tmp` and are lost whenever the function restarts (often within minutes). Uploads over 4.5 MB are rejected by Vercel. For real use, move `data.json` to a database (e.g. Vercel Postgres/KV, Supabase) or host the backend on a server with a disk.
-## Logins (three separate pages)
-| Role | URL | Access |
+Requires Node.js 18 or newer.
+
+```bash
+cd backend
+npm install
+npm start
+```
+
+Open http://localhost:3000. At startup the server also prints an address like `http://<your-ip>:3000`, which you can open on a phone connected to the same Wi-Fi.
+
+## Logins (demo mode)
+
+| Role | URL | How to log in |
 |---|---|---|
-| Student | `/` | **Demo mode:** roll number only, format `BXYYZZZ` (B + branch code + 2-digit joining year + 3-digit number, e.g. `B522001`) |
-| Mess staff | `/mess` | **Demo mode:** one-click "Enter mess dashboard" (no password) |
-| Admin | `/admin` | **Demo mode:** one-click "Enter admin dashboard" (no password) |
+| Student | `/` | Roll number in the format `BXYYZZZ`: B, a branch code, a 2-digit joining year and a 3-digit number (e.g. `B522001`) |
+| Mess staff | `/mess` | Click "Enter mess dashboard" (no password) |
+| Admin | `/admin` | Click "Enter admin dashboard" (no password) |
 
-Demo mode is for development only: anyone who can reach `/admin` or `/mess` gets in. When passwords are added later, start with `STAFF_PASSWORD_LOGIN=1 npm start` to bring back the email/password form (admin@test.in / @Admin123, mess1@test.in / @Mess001) and disable the demo endpoint.
+> ⚠️ Demo mode lets anyone who opens `/mess` or `/admin` get in. To require passwords, start the server with `STAFF_PASSWORD_LOGIN=1 npm start`. The staff logins are then `admin@test.in` / `@Admin123` and `mess1@test.in` / `@Mess001`.
+
+## Deploy on Vercel
+
+1. Import this GitHub repository at [vercel.com](https://vercel.com). Choose the framework preset **Other** and keep the root directory as the repo root.
+2. Add the environment variable `SESSION_SECRET` and set it to any long random string. Without it, users get logged out at random.
+3. Deploy. The student, mess and admin pages are at `/`, `/mess` and `/admin`.
+
+**Limitations on Vercel**
+- Vercel has no permanent storage, so data is kept in `/tmp`. New orders, notices, grievances and uploaded files are lost whenever the function restarts. For real use, store the data in a database (e.g. Supabase or Vercel Postgres).
+- Vercel rejects uploads larger than 4.5 MB.
+
+## Environment variables
+
+| Variable | Purpose |
+|---|---|
+| `PORT` | Local server port (default `3000`) |
+| `SESSION_SECRET` | Key used to sign login tokens. **Required on Vercel** |
+| `STAFF_PASSWORD_LOGIN=1` | Turns off demo login and requires staff passwords |
 
 ## Notes
-- QR scanning needs camera permission and HTTPS (or localhost). On a phone, host with HTTPS (e.g. ngrok/Render). A manual code box is a fallback.
-- Payment is a simulated UPI/Card step (`POST /api/orders`); plug Razorpay/PhonePe verification in there.
-- Grievance photos/videos are stored in `backend/uploads/` (JPG/PNG/GIF/WEBP/HEIC, MP4/WEBM/MOV; 3 files, 25 MB each) and only viewable by the owning student, mess and admin.
-- Charts use Chart.js from a CDN.
-- Each student has ONE permanent QR (`STU-XXXXXXXX`). Mess scans it and sees that student's orders, nearest meal first; the mess ticks a checkbox next to each order to mark it fulfilled, only within its window (30 min before start to 30 min after end).
-- **Phone:** the server prints an `Open on your phone (same Wi-Fi): http://<ip>:3000` address at startup. Camera QR scanning needs HTTPS (e.g. ngrok/Render) on a phone; typing the code works over plain http.
-- Add to Home Screen on the phone to install it like an app.
-- Payment methods: UPI, Card (simulated) and Cash. A cash order is `cash due` until the mess ticks the meal as fulfilled, at which point it becomes `paid` (the mess collects the cash at the counter). Admin revenue counts collected payments only and shows "Cash to collect" separately.
+
+- Scanning a QR with the camera needs HTTPS or localhost. Over plain `http` on a phone, type the code instead.
+- Payment is simulated in `POST /api/orders`. A real gateway such as Razorpay or PhonePe can be connected there.
+- Grievance uploads accept JPG, PNG, GIF, WEBP and HEIC images and MP4, WEBM and MOV videos, up to 3 files of 25 MB each. Only the student who uploaded them, the mess staff and the admin can view them.
+- Menu format in `data.json`: one dish per line. `A | B` means the student picks one, and `(NV)` marks a non-veg dish.
