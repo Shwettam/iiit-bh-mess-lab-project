@@ -188,7 +188,7 @@ app.put('/api/grievances/:id', auth('admin', 'mess'), (req, res) => {
   const g = db.grievances.find(x => x.id === req.params.id); if (g) g.status = 'resolved'; save(); res.json({ ok: true });
 });
 
-app.use(express.static(path.join(__dirname, '..', 'frontend'), { extensions: ['html'], etag: false, lastModified: false, setHeaders: r => r.setHeader('Cache-Control', 'no-store') })); // never serve a stale copy of the pages // /mess and /admin resolve to mess.html / admin.html
+app.use(express.static(path.join(__dirname, '..', 'public'), { extensions: ['html'], etag: false, lastModified: false, setHeaders: r => r.setHeader('Cache-Control', 'no-store') })); // never serve a stale copy of the pages // /mess and /admin resolve to mess.html / admin.html
 const PORT = process.env.PORT || 3000;
 if (require.main === module) app.listen(PORT, '0.0.0.0', () => {   // local `npm start`; on Vercel the app is exported instead
   console.log('IIIT-BH Mess running on http://localhost:' + PORT);

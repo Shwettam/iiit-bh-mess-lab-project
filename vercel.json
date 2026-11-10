@@ -1,6 +1,5 @@
 {
   "framework": null,
-  "outputDirectory": "frontend",
   "cleanUrls": true,
   "rewrites": [{ "source": "/api/(.*)", "destination": "/api" }]
 }

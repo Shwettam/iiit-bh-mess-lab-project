@@ -47,7 +47,7 @@ iiit-bh-mess-lab-project/
 │   ├── server.js        Express REST API (also serves the frontend locally)
 │   ├── data.json        menu, prices, orders, notices, grievances
 │   └── package.json
-├── frontend/
+├── public/              frontend (Vercel serves this folder as-is)
 │   ├── index.html       student page
 │   ├── mess.html        mess staff page
 │   ├── admin.html       admin page
