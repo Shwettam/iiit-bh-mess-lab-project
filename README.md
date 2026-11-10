@@ -2,6 +2,18 @@
 
 A web app for the IIIT Bhubaneswar mess. Students pre-order meals and show one QR code at the counter. Mess staff scan it to serve the meal, and the admin tracks payments, analytics and grievances. It works on phones and can be added to the home screen like an app.
 
+## Live demo
+
+Deployed on [Render](https://render.com):
+
+| Role | Link |
+|---|---|
+| Student | https://iiit-bh-mess-lab-project.onrender.com |
+| Mess staff | https://iiit-bh-mess-lab-project.onrender.com/mess |
+| Admin | https://iiit-bh-mess-lab-project.onrender.com/admin |
+
+> The free Render plan sleeps when idle, so the first visit can take up to a minute to load.
+
 ## Features
 
 **Student** (`/`)
@@ -37,7 +49,7 @@ A web app for the IIIT Bhubaneswar mess. Students pre-order meals and show one Q
 
 - **Backend:** Node.js and Express, with Multer for file uploads. Data is stored in PostgreSQL (e.g. a free [Neon](https://neon.tech) database).
 - **Frontend:** plain HTML, CSS and JavaScript (no build step). It also uses Chart.js, qrcodejs and html5-qrcode, loaded from a CDN.
-- **Hosting:** runs locally with `npm start`, or on Vercel as a serverless function.
+- **Hosting:** deployed on Render. Also runs locally with `npm start`, or on Vercel as a serverless function.
 
 ## Project structure
 
@@ -85,6 +97,13 @@ Open http://localhost:3000. At startup the server also prints an address like `h
 
 > ⚠️ Demo mode lets anyone who opens `/mess` or `/admin` get in. To require passwords, start the server with `STAFF_PASSWORD_LOGIN=1 npm start`. The staff logins are then `admin@test.in` / `@Admin123` and `mess1@test.in` / `@Mess001`.
 
+## Deploy on Render
+
+1. At [render.com](https://render.com), create a **Web Service** from this GitHub repository.
+2. Set **Root Directory** to `backend`, **Build Command** to `npm install` and **Start Command** to `npm start`.
+3. Add the environment variables `DATABASE_URL` and `SESSION_SECRET` (see below).
+4. Deploy. The student, mess and admin pages are at `/`, `/mess` and `/admin`.
+
 ## Deploy on Vercel
 
 1. Import this GitHub repository at [vercel.com](https://vercel.com). Choose the framework preset **Other** and keep the root directory as the repo root.
@@ -103,7 +122,7 @@ Open http://localhost:3000. At startup the server also prints an address like `h
 |---|---|
 | `DATABASE_URL` | Postgres connection string. **Required** |
 | `PORT` | Local server port (default `3000`) |
-| `SESSION_SECRET` | Key used to sign login tokens. **Required on Vercel** |
+| `SESSION_SECRET` | Key used to sign login tokens. **Required on Render and Vercel** |
 | `STAFF_PASSWORD_LOGIN=1` | Turns off demo login and requires staff passwords |
 
 ## Notes
